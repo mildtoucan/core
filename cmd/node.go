@@ -124,14 +124,14 @@ func (node *Node) Start() {
 		}
 
 		db = pg.Connect(options)
-		node.Postgres = lib.NewPostgres(db)
+		node.Postgres = lib.NewPostgres(db, node.Config.Trends)
 
 		// LoadMigrations registers all the migration files in the migrate package.
 		// See LoadMigrations for more info.
 		migrate.LoadMigrations()
 
 		// Migrate the database after loading all the migrations. This is equivalent
-		// to running "go run migrate.go migrate". See migrate.go for a migrations CLI tool
+		// to running "go run scripts/migrate.go migrate". See migrate.go for a migrations CLI tool
 		err = migrations.Run(db, "migrate", []string{"", "migrate"})
 		if err != nil {
 			panic(err)

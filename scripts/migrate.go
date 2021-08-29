@@ -14,9 +14,9 @@ const directory = "migrate"
 //
 // This file provides a database migration CLI. For example:
 //
-// Create a new migration: go run migrate.go create MyMigration
-// Migrate the database:   go run migrate.go migrate
-// Rollback the database:  go run migrate.go rollback
+// Create a new migration: go run scripts/migrate.go create MyMigration
+// Migrate the database:   go run scripts/migrate.go migrate
+// Rollback the database:  go run scripts/migrate.go rollback
 //
 
 func main() {

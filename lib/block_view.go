@@ -667,6 +667,18 @@ func (pe *ProfileEntry) IsDeleted() bool {
 	return pe.isDeleted
 }
 
+type TrendKey struct {
+	PKID        PKID
+	BlockHeight uint32
+}
+
+func MakeTrendKey(pkid *PKID, blockHeight uint32) TrendKey {
+	return TrendKey{
+		PKID:        *pkid,
+		BlockHeight: roundBlockHeight(blockHeight),
+	}
+}
+
 type UtxoView struct {
 	// Utxo data
 	NumUtxoEntries                  uint64
@@ -718,12 +730,16 @@ type UtxoView struct {
 	// Coin balance entries
 	HODLerPKIDCreatorPKIDToBalanceEntry map[BalanceEntryMapKey]*BalanceEntry
 
+	// Trends data
+	TrendsMap map[TrendKey]*PGTrend
+
 	// The hash of the tip the view is currently referencing. Mainly used
 	// for error-checking when doing a bulk operation on the view.
 	TipHash *BlockHash
 
 	Handle   *badger.DB
 	Postgres *Postgres
+	Trends   bool
 	Params   *BitCloutParams
 }
 
@@ -951,6 +967,9 @@ func (bav *UtxoView) _ResetViewMappingsAfterFlush() {
 
 	// Coin balance entries
 	bav.HODLerPKIDCreatorPKIDToBalanceEntry = make(map[BalanceEntryMapKey]*BalanceEntry)
+
+	// Trends data
+	bav.TrendsMap = make(map[TrendKey]*PGTrend)
 }
 
 func (bav *UtxoView) CopyUtxoView() (*UtxoView, error) {
@@ -1111,6 +1130,12 @@ func (bav *UtxoView) CopyUtxoView() (*UtxoView, error) {
 		newView.NFTKeyToAcceptedNFTBidHistory[nftKey] = &newNFTBidEntries
 	}
 
+	newView.TrendsMap = make(map[TrendKey]*PGTrend, len(bav.TrendsMap))
+	for trendKey, trend := range bav.TrendsMap {
+		newTrend := *trend
+		newView.TrendsMap[trendKey] = &newTrend
+	}
+
 	return newView, nil
 }
 
@@ -1143,6 +1168,7 @@ func NewUtxoView(
 	// info on that).
 	if view.Postgres != nil {
 		view.TipHash = view.Postgres.GetChain(MAIN_CHAIN).TipHash
+		view.Trends = view.Postgres.trends
 	} else {
 		view.TipHash = DbGetBestHash(view.Handle, ChainTypeBitCloutBlock /* don't get the header chain */)
 	}
@@ -3178,6 +3204,9 @@ func (bav *UtxoView) _connectBasicTransfer(
 			PrevPostEntry:    previousDiamondPostEntry,
 			PrevDiamondEntry: previousDiamondEntry,
 		})
+
+		// Update trends
+		bav.addTrendDiamond(receiverPKID.PKID, blockHeight, diamondRecipientTotal)
 	}
 
 	// If signature verification is requested then do that as well.
@@ -3210,6 +3239,89 @@ func (bav *UtxoView) _connectBasicTransfer(
 	// data.
 	return totalInput, totalOutput, utxoOpsForTxn, nil
 }
+
+//
+// BEGIN TRENDS
+//
+
+func roundBlockHeight(blockHeight uint32) uint32 {
+	return blockHeight / BlocksPerDay * BlocksPerDay
+}
+
+// Helper method for getting and setting a trend
+func (bav *UtxoView) getAndSetTrend(trendKey TrendKey) *PGTrend {
+	trend := bav.getTrend(trendKey)
+	bav.setTrendMappings(trend)
+	return trend
+}
+
+func (bav *UtxoView) getTrend(trendKey TrendKey) *PGTrend {
+	mapValue, existsMapValue := bav.TrendsMap[trendKey]
+	if existsMapValue {
+		return mapValue
+	}
+
+	blockHeight := roundBlockHeight(trendKey.BlockHeight)
+	trend := bav.Postgres.GetTrend(&trendKey.PKID, blockHeight)
+	if trend == nil {
+		trend = &PGTrend{
+			PKID:        trendKey.PKID.NewPKID(),
+			BlockHeight: blockHeight,
+		}
+	}
+
+	return trend
+}
+
+func (bav *UtxoView) setTrendMappings(trend *PGTrend) {
+	// This function shouldn't be called with nil.
+	if trend == nil {
+		glog.Errorf("setTrend: Called with nil trend")
+		return
+	}
+
+	bav.TrendsMap[MakeTrendKey(trend.PKID, trend.BlockHeight)] = trend
+}
+
+func (bav *UtxoView) addTrendDiamond(pkid *PKID, blockHeight uint32, totalNanos uint64) {
+	if !bav.Trends {
+		return
+	}
+
+	trend := bav.getAndSetTrend(MakeTrendKey(pkid, blockHeight))
+	trend.DiamondNanos += totalNanos
+}
+
+func (bav *UtxoView) addTrendFounderReward(pkid *PKID, blockHeight uint32, totalNanos uint64) {
+	if !bav.Trends {
+		return
+	}
+
+	trend := bav.getAndSetTrend(MakeTrendKey(pkid, blockHeight))
+	trend.FounderRewardNanos += totalNanos
+}
+
+func (bav *UtxoView) addTrendNFTSeller(pkid *PKID, blockHeight uint32, totalNanos uint64) {
+	if !bav.Trends {
+		return
+	}
+
+	trend := bav.getAndSetTrend(MakeTrendKey(pkid, blockHeight))
+	trend.NFTSellerNanos += totalNanos
+}
+
+func (bav *UtxoView) addTrendNFTRoyalty(pkid *PKID, blockHeight uint32, totalNanos uint64) {
+	if !bav.Trends {
+		return
+	}
+
+	trend := bav.getAndSetTrend(MakeTrendKey(pkid, blockHeight))
+	trend.NFTRoyaltyNanos += totalNanos
+}
+
+//
+// END TRENDS
+//
 
 func (bav *UtxoView) _getMessageEntryForMessageKey(messageKey *MessageKey) *MessageEntry {
 	// If an entry exists in the in-memory map, return the value of that mapping.
@@ -6673,6 +6785,9 @@ func (bav *UtxoView) _connectAcceptNFTBid(
 
 		// Rosetta uses this UtxoOperation to provide INPUT amounts
 		utxoOpsForTxn = append(utxoOpsForTxn, utxoOp)
+
+		// Update trends
+		bav.addTrendNFTSeller(updaterPKID.PKID, blockHeight, bidAmountMinusRoyalties)
 	}
 
 	// (4) Pay royalties to the original artist.
@@ -6702,6 +6817,10 @@ func (bav *UtxoView) _connectAcceptNFTBid(
 
 		// Rosetta uses this UtxoOperation to provide INPUT amounts
 		utxoOpsForTxn = append(utxoOpsForTxn, utxoOp)
+
+		// Update trends
+		artistPkid := bav.GetPKIDForPublicKey(nftPostEntry.PosterPublicKey).PKID
+		bav.addTrendNFTRoyalty(artistPkid, blockHeight, bidAmountMinusRoyalties)
 	}
 
 	// (5) Give any change back to the bidder.
@@ -7584,6 +7703,9 @@ func (bav *UtxoView) HelpConnectCreatorCoinBuy(
 
 			// Rosetta uses this UtxoOperation to provide INPUT amounts
 			utxoOpsForTxn = append(utxoOpsForTxn, utxoOp)
+
+			// Update trends
+			bav.addTrendFounderReward(creatorPKID, blockHeight, bitcloutFounderRewardNanos)
 		}
 	}
 
@@ -8264,6 +8386,9 @@ func (bav *UtxoView) _connectCreatorCoinTransfer(
 
 		// Now set the diamond entry mappings on the view so they are flushed to the DB.
 		bav._setDiamondEntryMappings(newDiamondEntry)
+
+		// TODO: Update trends, how do we calculate CLOUT nanos?
+		// bav.addTrendDiamond(receiverPKID.PKID, blockHeight, totalNanos)
 	}
 
 	// Add an operation to the list at the end indicating we've executed a

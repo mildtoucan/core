@@ -1991,6 +1991,12 @@ func (bc *Blockchain) ProcessBlock(bitcloutBlock *MsgBitCloutBlock, verifySignat
 			return false, false, errors.Wrapf(err, "ProcessBlock: Problem writing block info to db on simple add to tip")
 		}
 
+		// If we've enabled trends on this node then we do some extra processing
+		err = bc.ProcessTrends(utxoView, uint32(bitcloutBlock.Header.Height))
+		if err != nil {
+			return false, false, errors.Wrapf(err, "ProcessBlock: Problem processing trends")
+		}
+
 		// Now that we've set the best chain in the db, update our in-memory data
 		// structure to reflect this. Do a quick check first to make sure it's consistent.
 		lastIndex := len(bc.bestChain) - 1
@@ -2320,6 +2326,112 @@ func (bc *Blockchain) ProcessBlock(bitcloutBlock *MsgBitCloutBlock, verifySignat
 	// to our data structures and any unconnectedTxns that are no longer unconnectedTxns should have
 	// also been processed.
 	return isMainChain, false, nil
+}
+
+func (bc *Blockchain) ProcessTrends(utxoView *UtxoView, blockHeight uint32) error {
+	// Only process trends if enabled
+	if !utxoView.Trends {
+		return nil
+	}
+
+	// Only process trends every 288 blocks
+	if blockHeight%BlocksPerDay != 0 {
+		return nil
+	}
+
+	glog.Info("Trends: Beginning")
+
+	// We read straight from the database instead of the view to optimize for performance.
+	// This method is called immediately after a flush and we don't worry about what's still
+	// siting around in the mempool.
+	//
+	// We only calculate these metrics for public keys that have profiles
+	//
+	// TODO: Do we need to select these in small batches?
+
+	// Load all the profiles
+	profiles := bc.postgres.GetProfilesBatch(math.MaxInt32, 0)
+	numProfiles := len(profiles)
+	profilesMap := make(map[PKID]*PGProfile, numProfiles)
+	pkids := make([]*PKID, numProfiles)
+	publicKeys := make([]*PublicKey, numProfiles)
+	for _, profile := range profiles {
+		profilesMap[*profile.PKID] = profile
+		pkids = append(pkids, profile.PKID)
+		publicKeys = append(publicKeys, profile.PublicKey)
+	}
+
+	glog.Infof("Trends: Loaded %d profiles", numProfiles)
+
+	// Load all the creator coin balances
+	creatorCoinBalances := bc.postgres.GetCreatorCoinBalancesBatch(pkids)
+	numCreatorCoinBalances := len(creatorCoinBalances)
+	holdersMap := make(map[PKID][]*PGCreatorCoinBalance, numCreatorCoinBalances)
+	holdingsMap := make(map[PKID][]*PGCreatorCoinBalance, numCreatorCoinBalances)
+	for _, creatorCoin := range creatorCoinBalances {
+		holdersMap[*creatorCoin.CreatorPKID] = append(holdersMap[*creatorCoin.HolderPKID], creatorCoin)
+		holdingsMap[*creatorCoin.HolderPKID] = append(holdingsMap[*creatorCoin.CreatorPKID], creatorCoin)
+	}
+
+	glog.Infof("Trends: Loaded %d creator coin balances", numCreatorCoinBalances)
+
+	// Load all the trends
+	roundHeight := roundBlockHeight(blockHeight)
+	trends := bc.postgres.GetTrendsBatch(pkids, roundHeight)
+	numTrends := len(trends)
+	trendsMap := make(map[PKID]*PGTrend, numTrends)
+	for _, trend := range trends {
+		trendsMap[*trend.PKID] = trend
+	}
+
+	glog.Infof("Trends: Loaded %d trends", numTrends)
+
+	// Load all the balances
+	balances := bc.postgres.GetBalancesBatch(publicKeys)
+	numBalances := len(balances)
+	balanceMap := make(map[PublicKey]*PGBalance, numBalances)
+	for _, balance := range balances {
+		balanceMap[*balance.PublicKey] = balance
+	}
+
+	glog.Infof("Trends: Loaded %d balances", numBalances)
+
+	for _, profile := range profiles {
+		balance := balanceMap[*profile.PublicKey]
+		holdings := holdersMap[*profile.PKID]
+		holders := holdingsMap[*profile.PKID]
+		trend := trendsMap[*profile.PKID]
+		if trend == nil {
+			trend = &PGTrend{
+				PKID: profile.PKID.NewPKID(),
+			}
+		}
+
+		holdingNanos := uint64(0)
+		for _, holding := range holdings {
+			holdingNanos += CalculateBitCloutToReturn(holding.BalanceNanos,
+				profile.CoinsInCirculationNanos, profile.BitCloutLockedNanos, bc.params)
+		}
+
+		trend.HoldingNanos = holdingNanos
+		trend.NumHolders = uint64(len(holders))
+		trend.BalanceNanos = balance.BalanceNanos
+		trend.LockedNanos = profile.BitCloutLockedNanos
+		trend.CoinsInCirculation = profile.CoinsInCirculationNanos
+	}
+
+	glog.Infof("Trends: Calculated %d trends", numTrends)
+
+	if len(trends) > 0 {
+		err := bc.postgres.UpsertTrends(trends)
+		if err != nil {
+			return errors.Wrap(err, "ProcessTrends: Upsert trends failed")
+		}
+	}
+
+	glog.Info("Processing trends complete")
+
+	return nil
 }
 
 // ValidateTransaction creates a UtxoView and sees if the transaction can be connected

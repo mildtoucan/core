@@ -11,17 +11,19 @@ import (
 )
 
 type Postgres struct {
-	db *pg.DB
+	db     *pg.DB
+	trends bool
 }
 
-func NewPostgres(db *pg.DB) *Postgres {
+func NewPostgres(db *pg.DB, trends bool) *Postgres {
 	// Uncomment to print all queries.
 	//db.AddQueryHook(pgdebug.DebugHook{
 	//	Verbose: true,
 	//})
 
 	return &Postgres{
-		db: db,
+		db:     db,
+		trends: trends,
 	}
 }
 
@@ -587,6 +589,30 @@ func (bid *PGNFTBid) NewNFTBidEntry() *NFTBidEntry {
 }
 
 //
+// Trends
+//
+
+type PGTrend struct {
+	tableName struct{} `pg:"pg_trends"`
+
+	PKID        *PKID  `pg:",pk,type:bytea"`
+	BlockHeight uint32 `pg:",pk,use_zero"`
+
+	// One bucket every 288 blocks
+	FounderRewardNanos uint64 `pg:",use_zero"`
+	DiamondNanos       uint64 `pg:",use_zero"`
+	NFTSellerNanos     uint64 `pg:",use_zero"`
+	NFTRoyaltyNanos    uint64 `pg:",use_zero"`
+
+	// One snapshot every 288 blocks
+	NumHolders         uint64 `pg:",use_zero"`
+	CoinsInCirculation uint64 `pg:",use_zero"`
+	LockedNanos        uint64 `pg:",use_zero"`
+	BalanceNanos       uint64 `pg:",use_zero"`
+	HoldingNanos       uint64 `pg:",use_zero"`
+}
+
+//
 // Blockchain and Transactions
 //
 
@@ -1088,6 +1114,9 @@ func (postgres *Postgres) FlushView(view *UtxoView) error {
 		if err := postgres.flushNFTBids(tx, view); err != nil {
 			return err
 		}
+		if err := postgres.flushTrends(tx, view); err != nil {
+			return err
+		}
 
 		return nil
 	})
@@ -1530,6 +1559,27 @@ func (postgres *Postgres) flushNFTBids(tx *pg.Tx, view *UtxoView) error {
 	return nil
 }
 
+func (postgres *Postgres) flushTrends(tx *pg.Tx, view *UtxoView) error {
+	// Only flush trends if enabled
+	if !postgres.trends {
+		return nil
+	}
+
+	var insertTrends []*PGTrend
+	for _, trend := range view.TrendsMap {
+		insertTrends = append(insertTrends, trend)
+	}
+
+	if len(insertTrends) > 0 {
+		_, err := tx.Model(&insertTrends).WherePK().OnConflict("(pkid, block_height) DO UPDATE").Returning("NULL").Insert()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 //
 // UTXOS
 //
@@ -1648,6 +1698,12 @@ func (postgres *Postgres) GetProfilesForUsername(usernames []string) []*PGProfil
 	if err != nil {
 		return nil
 	}
+	return profiles
+}
+
+func (postgres *Postgres) GetProfilesBatch(limit int, offset int) []*PGProfile {
+	var profiles []*PGProfile
+	_ = postgres.db.Model(&profiles).WherePK().Offset(offset).Limit(limit).Select()
 	return profiles
 }
 
@@ -1837,6 +1893,15 @@ func (postgres *Postgres) GetHolders(pkid *PKID) []*PGCreatorCoinBalance {
 	return holdings
 }
 
+func (postgres *Postgres) GetCreatorCoinBalancesBatch(pkids []*PKID) []*PGCreatorCoinBalance {
+	var balances []*PGCreatorCoinBalance
+	err := postgres.db.Model(&balances).Where("holder_pkid IN (?) OR creator_pkid IN (?)", pkids, pkids).Select()
+	if err != nil {
+		return nil
+	}
+	return balances
+}
+
 //
 // NFTS
 //
@@ -1916,6 +1981,45 @@ func (postgres *Postgres) GetBalance(publicKey *PublicKey) uint64 {
 		return 0
 	}
 	return balance.BalanceNanos
+}
+
+func (postgres *Postgres) GetBalancesBatch(publicKeys []*PublicKey) []*PGBalance {
+	var balances []*PGBalance
+	err := postgres.db.Model(&balances).Where("public_key in (?)", publicKeys).Select()
+	if err != nil {
+		return nil
+	}
+	return balances
+}
+
+//
+// Trends
+//
+
+func (postgres *Postgres) GetTrend(pkid *PKID, blockHeight uint32) *PGTrend {
+	trend := PGTrend{
+		PKID:        pkid,
+		BlockHeight: blockHeight,
+	}
+	err := postgres.db.Model(&trend).WherePK().First()
+	if err != nil {
+		return nil
+	}
+	return &trend
+}
+
+func (postgres *Postgres) UpsertTrends(trends []*PGTrend) error {
+	_, err := postgres.db.Model(&trends).WherePK().OnConflict("DO UPDATE").Insert()
+	return err
+}
+
+func (postgres *Postgres) GetTrendsBatch(pkids []*PKID, blockHeight uint32) []*PGTrend {
+	var trends []*PGTrend
+	err := postgres.db.Model(&trends).Where("pkid IN (?) AND block_height = ?", pkids, blockHeight).Select()
+	if err != nil {
+		return nil
+	}
+	return trends
 }
 
 //
