@@ -1701,9 +1701,9 @@ func (postgres *Postgres) GetProfilesForUsername(usernames []string) []*PGProfil
 	return profiles
 }
 
-func (postgres *Postgres) GetProfilesBatch(limit int, offset int) []*PGProfile {
+func (postgres *Postgres) GetProfilesBatch() []*PGProfile {
 	var profiles []*PGProfile
-	_ = postgres.db.Model(&profiles).WherePK().Offset(offset).Limit(limit).Select()
+	_ = postgres.db.Model(&profiles).Select()
 	return profiles
 }
 
@@ -1895,7 +1895,7 @@ func (postgres *Postgres) GetHolders(pkid *PKID) []*PGCreatorCoinBalance {
 
 func (postgres *Postgres) GetCreatorCoinBalancesBatch(pkids []*PKID) []*PGCreatorCoinBalance {
 	var balances []*PGCreatorCoinBalance
-	err := postgres.db.Model(&balances).Where("holder_pkid IN (?) OR creator_pkid IN (?)", pkids, pkids).Select()
+	err := postgres.db.Model(&balances).WhereInMulti("holder_pkid IN (?), pkids) OR creator_pkid IN (?)", pkids, pkids).Select()
 	if err != nil {
 		return nil
 	}
@@ -1985,7 +1985,7 @@ func (postgres *Postgres) GetBalance(publicKey *PublicKey) uint64 {
 
 func (postgres *Postgres) GetBalancesBatch(publicKeys []*PublicKey) []*PGBalance {
 	var balances []*PGBalance
-	err := postgres.db.Model(&balances).Where("public_key in (?)", publicKeys).Select()
+	err := LogSelect(postgres.db.Model(&balances).WhereIn("public_key IN (?)", publicKeys))
 	if err != nil {
 		return nil
 	}
@@ -2009,7 +2009,7 @@ func (postgres *Postgres) GetTrend(pkid *PKID, blockHeight uint32) *PGTrend {
 }
 
 func (postgres *Postgres) UpsertTrends(trends []*PGTrend) error {
-	_, err := postgres.db.Model(&trends).WherePK().OnConflict("DO UPDATE").Insert()
+	_, err := postgres.db.Model(&trends).WherePK().OnConflict("(pkid, block_height) DO UPDATE").Insert()
 	return err
 }
 

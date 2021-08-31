@@ -270,8 +270,14 @@ func NewPublicKey(publicKeyBytes []byte) *PublicKey {
 	return publicKey
 }
 
-func (publicKey *PublicKey) ToBytes() []byte {
-	return publicKey[:]
+func (pk *PublicKey) ToBytes() []byte {
+	return pk[:]
+}
+
+func (pk *PublicKey) NewPublicKey() *PublicKey {
+	newPk := &PublicKey{}
+	copy(newPk[:], pk[:])
+	return newPk
 }
 
 func PublicKeyToPKID(publicKey []byte) *PKID {

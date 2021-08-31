@@ -2350,7 +2350,7 @@ func (bc *Blockchain) ProcessTrends(utxoView *UtxoView, blockHeight uint32) erro
 	// TODO: Do we need to select these in small batches?
 
 	// Load all the profiles
-	profiles := bc.postgres.GetProfilesBatch(math.MaxInt32, 0)
+	profiles := bc.postgres.GetProfilesBatch()
 	numProfiles := len(profiles)
 	profilesMap := make(map[PKID]*PGProfile, numProfiles)
 	pkids := make([]*PKID, numProfiles)
@@ -2396,6 +2396,7 @@ func (bc *Blockchain) ProcessTrends(utxoView *UtxoView, blockHeight uint32) erro
 
 	glog.Infof("Trends: Loaded %d balances", numBalances)
 
+	var upsertTrends []*PGTrend
 	for _, profile := range profiles {
 		balance := balanceMap[*profile.PublicKey]
 		holdings := holdersMap[*profile.PKID]
@@ -2403,7 +2404,8 @@ func (bc *Blockchain) ProcessTrends(utxoView *UtxoView, blockHeight uint32) erro
 		trend := trendsMap[*profile.PKID]
 		if trend == nil {
 			trend = &PGTrend{
-				PKID: profile.PKID.NewPKID(),
+				PKID:        profile.PKID.NewPKID(),
+				BlockHeight: roundHeight,
 			}
 		}
 
@@ -2418,12 +2420,14 @@ func (bc *Blockchain) ProcessTrends(utxoView *UtxoView, blockHeight uint32) erro
 		trend.BalanceNanos = balance.BalanceNanos
 		trend.LockedNanos = profile.BitCloutLockedNanos
 		trend.CoinsInCirculation = profile.CoinsInCirculationNanos
+
+		upsertTrends = append(upsertTrends, trend)
 	}
 
-	glog.Infof("Trends: Calculated %d trends", numTrends)
+	glog.Infof("Trends: Calculated %d trends", len(upsertTrends))
 
-	if len(trends) > 0 {
-		err := bc.postgres.UpsertTrends(trends)
+	if len(upsertTrends) > 0 {
+		err := bc.postgres.UpsertTrends(upsertTrends)
 		if err != nil {
 			return errors.Wrap(err, "ProcessTrends: Upsert trends failed")
 		}

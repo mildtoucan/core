@@ -9,18 +9,19 @@ func init() {
 	up := func(db orm.DB) error {
 		_, err := db.Exec(`
 			CREATE TABLE pg_trends (
-				public_key           BYTEA,
+				pkid                 BYTEA,
 				block_height         BIGINT,
 				founder_reward_nanos BIGINT,
 				diamond_nanos        BIGINT,
 				nft_seller_nanos     BIGINT,
 				nft_royalty_nanos    BIGINT,
 				num_holders          BIGINT,
+				coins_in_circulation BIGINT,
 				locked_nanos         BIGINT,
 				balance_nanos        BIGINT,
 				holding_nanos        BIGINT,
 
-				PRIMARY KEY (public_key, block_height)
+				PRIMARY KEY (pkid, block_height)
 			)
 		`)
 		return err
