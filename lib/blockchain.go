@@ -2417,9 +2417,11 @@ func (bc *Blockchain) ProcessTrends(utxoView *UtxoView, blockHeight uint32) erro
 
 		trend.HoldingNanos = holdingNanos
 		trend.NumHolders = uint64(len(holders))
-		trend.BalanceNanos = balance.BalanceNanos
 		trend.LockedNanos = profile.BitCloutLockedNanos
 		trend.CoinsInCirculation = profile.CoinsInCirculationNanos
+		if balance != nil {
+			trend.BalanceNanos = balance.BalanceNanos
+		}
 
 		upsertTrends = append(upsertTrends, trend)
 	}

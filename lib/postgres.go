@@ -1,6 +1,7 @@
 package lib
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/dgraph-io/badger/v3"
@@ -1137,9 +1138,11 @@ func (postgres *Postgres) flushUtxos(tx *pg.Tx, view *UtxoView) error {
 		})
 	}
 
-	_, err := tx.Model(&outputs).WherePK().OnConflict("(output_hash, output_index) DO UPDATE").Insert()
-	if err != nil {
-		return err
+	if len(outputs) > 0 {
+		_, err := tx.Model(&outputs).WherePK().OnConflict("(output_hash, output_index) DO UPDATE").Insert()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -2070,6 +2073,39 @@ func (postgres *Postgres) InitGenesisBlock(params *BitCloutParams, db *badger.DB
 		if err != nil {
 			return err
 		}
+	}
+
+	// Add seed transactions
+	utxoView, err := NewUtxoView(db, params, postgres)
+	if err != nil {
+		return fmt.Errorf("InitGenesisBlock: Error initializing UtxoView")
+	}
+
+	for txnIndex, txnHex := range params.SeedTxns {
+		txnBytes, err := hex.DecodeString(txnHex)
+		if err != nil {
+			return fmt.Errorf("InitGenesisBlock: Error decoding txn HEX: %v, txn index: %v, txn hex: %v", err, txnIndex, txnHex)
+		}
+
+		txn := &MsgBitCloutTxn{}
+		if err := txn.FromBytes(txnBytes); err != nil {
+			return fmt.Errorf(
+				"InitGenesisBlock: Error decoding txn BYTES: %v, txn index: %v, txn hex: %v", err, txnIndex, txnHex)
+		}
+
+		// Important: ignoreUtxos makes it so that the inputs/outputs aren't processed, which is important.
+		// Set txnSizeBytes to 0 here as the minimum network fee is 0 at genesis block, so there is no need to serialize
+		// these transactions to check if they meet the minimum network fee requirement.
+		_, _, _, _, err = utxoView.ConnectTransaction(txn, txn.Hash(), 0, 0, false, true)
+		if err != nil {
+			return fmt.Errorf("InitGenesisBlock: Error connecting transaction: %v, txn index: %v, txn hex: %v", err, txnIndex, txnHex)
+		}
+	}
+
+	// Flush all the data in the view.
+	err = utxoView.FlushToDb()
+	if err != nil {
+		return fmt.Errorf("InitGenesisBlock: Error flushing seed txns to DB: %v", err)
 	}
 
 	return nil
