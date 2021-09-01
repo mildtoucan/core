@@ -8693,9 +8693,14 @@ func (bav *UtxoView) Preload(bitcloutBlock *MsgBitCloutBlock) error {
 		}
 
 		// Set real entries for all the profiles that actually exist
-		result := bav.Postgres.GetProfilesForPublicKeys(publicKeys)
-		for _, profile := range result {
+		profiles := bav.Postgres.GetProfilesForPublicKeys(publicKeys)
+		for _, profile := range profiles {
 			bav.setProfileMappings(profile)
+		}
+
+		balances := bav.Postgres.GetBalancesBatch(publicKeys)
+		for _, balance := range balances {
+			bav.PublicKeyToBitcloutBalanceNanos[MakePkMapKey(balance.PublicKey.ToBytes())] = balance.BalanceNanos
 		}
 	}
 
