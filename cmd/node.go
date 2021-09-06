@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"context"
+	//"github.com/aws/aws-sdk-go-v2/credentials"
 	"net"
 	"os"
 	"time"
@@ -17,6 +19,8 @@ import (
 	"github.com/dgraph-io/badger/v3"
 	"github.com/go-pg/pg/v10"
 	"github.com/golang/glog"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/config"
 	migrations "github.com/robinjoseph08/go-pg-migrations/v3"
 	"github.com/sasha-s/go-deadlock"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
@@ -30,6 +34,7 @@ type Node struct {
 	Params   *lib.BitCloutParams
 	Config   *Config
 	Postgres *lib.Postgres
+	SQSQueue *lib.SQSQueue
 }
 
 func NewNode(config *Config) *Node {
@@ -136,6 +141,17 @@ func (node *Node) Start() {
 		if err != nil {
 			panic(err)
 		}
+	}
+
+	if node.Config.SQSUri != "" {
+		queueURL := node.Config.SQSUri;
+		cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion("us-east-1"))
+		if err != nil {
+			panic(err)
+		}
+		// Create Amazon SQS API client using path style addressing.
+		client := sqs.NewFromConfig(cfg)
+		node.SQSQueue = lib.NewSQSQueue(client, queueURL)
 	}
 
 	// Setup the server
