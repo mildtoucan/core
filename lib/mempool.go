@@ -1099,6 +1099,7 @@ func (mp *BitCloutMempool) tryAcceptTransaction(
 		mempoolTx.TxMeta = txnMeta
 	}
 
+	mp.bc.sqsQueue.SendTxnMessage(tx, txnMeta, mp.bc.params)
 	glog.Tracef("tryAcceptTransaction: Accepted transaction %v (pool size: %v)", txHash,
 		len(mp.poolMap))
 
@@ -1548,7 +1549,6 @@ func (mp *BitCloutMempool) TryAcceptTransaction(tx *MsgBitCloutTxn, rateLimit bo
 	// Protect concurrent access.
 	mp.mtx.Lock()
 	defer mp.mtx.Unlock()
-
 	hashes, mempoolTx, err := mp.tryAcceptTransaction(tx, rateLimit, true, verifySignatures)
 
 	return hashes, mempoolTx, err

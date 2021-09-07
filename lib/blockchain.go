@@ -402,6 +402,7 @@ type OrphanBlock struct {
 type Blockchain struct {
 	db                              *badger.DB
 	postgres                        *Postgres
+	sqsQueue						*SQSQueue
 	timeSource                      chainlib.MedianTimeSource
 	trustedBlockProducerPublicKeys  map[PkMapKey]bool
 	trustedBlockProducerStartHeight uint64
@@ -583,6 +584,7 @@ func NewBlockchain(
 	timeSource chainlib.MedianTimeSource,
 	db *badger.DB,
 	postgres *Postgres,
+	sqsQueue *SQSQueue,
 	server *Server,
 ) (*Blockchain, error) {
 
@@ -598,6 +600,7 @@ func NewBlockchain(
 	bc := &Blockchain{
 		db:                              db,
 		postgres:                        postgres,
+		sqsQueue:						 sqsQueue,
 		timeSource:                      timeSource,
 		trustedBlockProducerPublicKeys:  trustedBlockProducerPublicKeys,
 		trustedBlockProducerStartHeight: trustedBlockProducerStartHeight,
@@ -2649,7 +2652,6 @@ func (bc *Blockchain) CreateFollowTxn(
 	minFeeRateNanosPerKB uint64, mempool *BitCloutMempool) (
 	_txn *MsgBitCloutTxn, _totalInput uint64, _changeAmount uint64, _fees uint64,
 	_err error) {
-
 	// A Follow transaction doesn't need any inputs or outputs.
 	txn := &MsgBitCloutTxn{
 		PublicKey: senderPublicKey,
@@ -3562,7 +3564,6 @@ func (bc *Blockchain) AddInputsAndChangeToTransaction(
 func (bc *Blockchain) AddInputsAndChangeToTransactionWithSubsidy(
 	txArg *MsgBitCloutTxn, minFeeRateNanosPerKB uint64, inputSubsidy uint64, mempool *BitCloutMempool, additionalFees uint64) (
 	_totalInputAdded uint64, _spendAmount uint64, _totalChangeAdded uint64, _fee uint64, _err error) {
-
 	// The transaction we're working with should never have any inputs
 	// set since we'll be setting the inputs here and dealing with a case where
 	// inputs are partially set before-hand would significantly complicate this

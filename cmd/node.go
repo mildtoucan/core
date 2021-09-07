@@ -162,6 +162,7 @@ func (node *Node) Start() {
 		node.Config.ConnectIPs,
 		node.chainDB,
 		node.Postgres,
+		node.SQSQueue,
 		node.Config.TargetOutboundPeers,
 		node.Config.MaxInboundPeers,
 		node.Config.MinerPublicKeys,
