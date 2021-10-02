@@ -15,27 +15,10 @@ type SQSQueue struct {
 	queueUrl *string
 }
 
-type SQSQueueTransaction struct {
-	// A string that uniquely identifies this transaction. This is a sha256 hash
-	// of the transaction’s data encoded using base58 check encoding.
-	TransactionIDBase58Check string
-	// The raw hex of the transaction data. This can be fully-constructed from
-	// the human-readable portions of this object.
-	RawTransactionHex string `json:",omitempty"`
-	// The inputs and outputs for this transaction.
-	// The signature of the transaction in hex format.
-	SignatureHex string `json:",omitempty"`
-	// Will always be “0” for basic transfers
-	TransactionType string `json:",omitempty"`
-	// TODO: Create a TransactionMeta portion for the response.
-
-	// The hash of the block in which this transaction was mined. If the
-	// transaction is unconfirmed, this field will be empty. To look up
-	// how many confirmations a transaction has, simply plug this value
-	// into the "block" endpoint.
-	BlockHashHex string `json:",omitempty"`
-
-	TransactionMetadata TransactionMetadata `json:",omitempty"`
+type SqsInput struct {
+	TransactionHash string
+	TransactionMetadata BitCloutTxnMetadata
+	PostBody string
 }
 
 func NewSQSQueue(client *sqs.Client, queueUrl string) *SQSQueue {
@@ -45,53 +28,50 @@ func NewSQSQueue(client *sqs.Client, queueUrl string) *SQSQueue {
 	return &newSqsQueue
 }
 
-func (sqsQueue *SQSQueue) SendTxnMessage(txn *MsgBitCloutTxn, txnMeta *TransactionMetadata, params *BitCloutParams) {
-	response := APITransactionToResponse(*txn, *txnMeta, *params)
+func (sqsQueue *SQSQueue) SendSQSTxnMessage(txn *MsgBitCloutTxn) {
+	var metadata BitCloutTxnMetadata
+	if txn.TxnMeta.GetTxnType() == TxnTypeSubmitPost {
+		metadata = txn.TxnMeta.(*SubmitPostMetadata)
+	} else if txn.TxnMeta.GetTxnType() == TxnTypeLike {
+		metadata = txn.TxnMeta.(*LikeMetadata)
+	} else if txn.TxnMeta.GetTxnType() == TxnTypeFollow {
+		metadata = txn.TxnMeta.(*FollowMetadata)
+	} else if txn.TxnMeta.GetTxnType() == TxnTypeBasicTransfer {
+		metadata = txn.TxnMeta.(*BasicTransferMetadata)
+	} else if txn.TxnMeta.GetTxnType() == TxnTypeCreatorCoin {
+		metadata = txn.TxnMeta.(*CreatorCoinMetadataa)
+	} else if txn.TxnMeta.GetTxnType() == TxnTypeCreatorCoinTransfer {
+		metadata = txn.TxnMeta.(*CreatorCoinTransferMetadataa)
+	} else {
+		// If we get here then the txn is not a type we're interested in
+		return
+	}
+
+	var postBody string
+	if txn.TxnMeta.GetTxnType() == TxnTypeSubmitPost {
+		postBody = string(txn.TxnMeta.(*SubmitPostMetadata).Body)
+	} else {
+		postBody = ""
+	}
+
+	sqsInput := SqsInput {
+		TransactionHash: hex.EncodeToString(txn.Hash()[:]),
+		TransactionMetadata: metadata,
+		PostBody: postBody,
+	}
+
+	res, err := json.Marshal(sqsInput)
+	if err != nil {
+		glog.Errorf("SendSQSTxnMessage: Error marshaling transaction JSON : %v", err)
+	}
+
 	sendMessageInput := &sqs.SendMessageInput{
-		DelaySeconds: 10,
-		MessageBody: aws.String(string(serialize(response))),
+		DelaySeconds: 0,
+		MessageBody: aws.String(string(res)),
 		QueueUrl:    sqsQueue.queueUrl,
 	}
-	_, err := sqsQueue.sqsClient.SendMessage(context.TODO(), sendMessageInput);
+	_, err = sqsQueue.sqsClient.SendMessage(context.TODO(), sendMessageInput)
 	if err != nil {
-		glog.Error(err)
+		glog.Error("SendSQSTxnMessage: Error sending sqs message : %v", err)
 	}
-}
-
-func serialize(sqsQueueTxn *SQSQueueTransaction) []byte {
-	data := make(map[string]string)
-	data["transactionType"] = sqsQueueTxn.TransactionType
-	data["transactionHex"] = sqsQueueTxn.RawTransactionHex
-	data["transactionAffectedPublicKey0"] = sqsQueueTxn.TransactionMetadata.AffectedPublicKeys[0].PublicKeyBase58Check
-	data["transactionAffectedPublicKey0Metadata"] = sqsQueueTxn.TransactionMetadata.AffectedPublicKeys[0].Metadata
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		glog.Error("Could not serialize SQS Queue input")
-	}
-	return jsonData
-
-}
-
-func APITransactionToResponse(
-	txnn MsgBitCloutTxn,
-	txnMeta TransactionMetadata,
-	params BitCloutParams) *SQSQueueTransaction {
-
-	signatureHex := ""
-	if txnn.Signature != nil {
-		signatureHex = hex.EncodeToString(txnn.Signature.Serialize())
-	}
-
-	txnBytes, _ := txnn.ToBytes(false /*preSignature*/)
-	ret := &SQSQueueTransaction{
-		TransactionIDBase58Check: PkToString(txnn.Hash()[:], &params),
-		RawTransactionHex:        hex.EncodeToString(txnBytes),
-		SignatureHex:             signatureHex,
-		TransactionType:          txnn.TxnMeta.GetTxnType().String(),
-
-		TransactionMetadata: txnMeta,
-	}
-
-	return ret
 }
