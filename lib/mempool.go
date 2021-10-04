@@ -1099,7 +1099,7 @@ func (mp *BitCloutMempool) tryAcceptTransaction(
 		mempoolTx.TxMeta = txnMeta
 	}
 
-	mp.bc.sqsQueue.SendTxnMessage(tx, txnMeta, mp.bc.params)
+	mp.bc.sqsQueue.SendSQSTxnMessage(mempoolTx)
 	glog.Tracef("tryAcceptTransaction: Accepted transaction %v (pool size: %v)", txHash,
 		len(mp.poolMap))
 

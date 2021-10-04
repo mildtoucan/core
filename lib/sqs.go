@@ -16,9 +16,13 @@ type SQSQueue struct {
 }
 
 type SqsInput struct {
+	TransactionType string
 	TransactionHash string
-	TransactionMetadata BitCloutTxnMetadata
-	PostBody string
+	NotificationData BitCloutNotification
+}
+
+type BitCloutNotification interface {
+
 }
 
 func NewSQSQueue(client *sqs.Client, queueUrl string) *SQSQueue {
@@ -28,36 +32,76 @@ func NewSQSQueue(client *sqs.Client, queueUrl string) *SQSQueue {
 	return &newSqsQueue
 }
 
-func (sqsQueue *SQSQueue) SendSQSTxnMessage(txn *MsgBitCloutTxn) {
-	var metadata BitCloutTxnMetadata
+type SubmitPostNotification struct {
+	AffectedPublicKeys []*AffectedPublicKey
+	PostHashToModify string
+	ParentStakeId string
+	Body string
+	CreatorBasisPoints uint64
+	StakeMultipleBasisPoints uint64
+	TimestampNanos uint64
+	IsHidden bool
+}
+
+type LikeNotification struct {
+	AffectedPublicKeys []*AffectedPublicKey
+	LikedPostHashHex string
+	IsUnlike bool
+}
+
+type FollowNotification struct {
+	AffectedPublicKeys []*AffectedPublicKey
+	FollowedPublicKey string
+	IsUnfollow bool
+}
+
+type BasicTransferNotification struct {
+
+}
+
+type CreatorCoinNotification struct {
+	AffectedPublicKeys []*AffectedPublicKey
+	ProfilePublicKey string
+	OperationType CreatorCoinOperationType
+	BitCloutToSellNanos    uint64
+	CreatorCoinToSellNanos uint64
+	BitCloutToAddNanos     uint64
+	MinBitCloutExpectedNanos    uint64
+	MinCreatorCoinExpectedNanos uint64
+}
+
+type CreatorCoinTransferNotification struct {
+	AffectedPublicKeys []*AffectedPublicKey
+	ProfilePublicKey string
+	CreatorCoinToTransferNanos uint64
+	ReceiverPublicKey          string
+}
+
+
+func (sqsQueue *SQSQueue) SendSQSTxnMessage(mempoolTxn *MempoolTx) {
+	txn := mempoolTxn.Tx
+	var notificationData BitCloutNotification
 	if txn.TxnMeta.GetTxnType() == TxnTypeSubmitPost {
-		metadata = txn.TxnMeta.(*SubmitPostMetadata)
+		notificationData = makeSubmitPostNotification(mempoolTxn)
 	} else if txn.TxnMeta.GetTxnType() == TxnTypeLike {
-		metadata = txn.TxnMeta.(*LikeMetadata)
+		notificationData = makeLikeNotification(mempoolTxn)
 	} else if txn.TxnMeta.GetTxnType() == TxnTypeFollow {
-		metadata = txn.TxnMeta.(*FollowMetadata)
+		notificationData = makeFollowNotification(mempoolTxn)
 	} else if txn.TxnMeta.GetTxnType() == TxnTypeBasicTransfer {
-		metadata = txn.TxnMeta.(*BasicTransferMetadata)
+		notificationData = makeBasicTransferNotification(mempoolTxn)
 	} else if txn.TxnMeta.GetTxnType() == TxnTypeCreatorCoin {
-		metadata = txn.TxnMeta.(*CreatorCoinMetadataa)
+		notificationData = makeCreatorCoinNotification(mempoolTxn)
 	} else if txn.TxnMeta.GetTxnType() == TxnTypeCreatorCoinTransfer {
-		metadata = txn.TxnMeta.(*CreatorCoinTransferMetadataa)
+		notificationData = makeCreatorCoinTransferNotification(mempoolTxn)
 	} else {
 		// If we get here then the txn is not a type we're interested in
 		return
 	}
 
-	var postBody string
-	if txn.TxnMeta.GetTxnType() == TxnTypeSubmitPost {
-		postBody = string(txn.TxnMeta.(*SubmitPostMetadata).Body)
-	} else {
-		postBody = ""
-	}
-
 	sqsInput := SqsInput {
+		TransactionType: txn.TxnMeta.GetTxnType().String(),
 		TransactionHash: hex.EncodeToString(txn.Hash()[:]),
-		TransactionMetadata: metadata,
-		PostBody: postBody,
+		NotificationData: notificationData,
 	}
 
 	res, err := json.Marshal(sqsInput)
@@ -73,5 +117,70 @@ func (sqsQueue *SQSQueue) SendSQSTxnMessage(txn *MsgBitCloutTxn) {
 	_, err = sqsQueue.sqsClient.SendMessage(context.TODO(), sendMessageInput)
 	if err != nil {
 		glog.Error("SendSQSTxnMessage: Error sending sqs message : %v", err)
+	}
+}
+
+func makeSubmitPostNotification(mempoolTxn *MempoolTx) (*SubmitPostNotification){
+	metadata := mempoolTxn.Tx.TxnMeta.(*SubmitPostMetadata)
+	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
+	return &SubmitPostNotification {
+		AffectedPublicKeys: affectedPublicKeys,
+		PostHashToModify: hex.EncodeToString(metadata.PostHashToModify),
+		ParentStakeId: hex.EncodeToString(metadata.ParentStakeID),
+		Body: string(metadata.Body),
+		CreatorBasisPoints: metadata.CreatorBasisPoints,
+		StakeMultipleBasisPoints: metadata.StakeMultipleBasisPoints,
+		TimestampNanos: metadata.TimestampNanos,
+		IsHidden: metadata.IsHidden,
+	}
+}
+
+func makeLikeNotification(mempoolTxn *MempoolTx) (*LikeNotification) {
+	metadata := mempoolTxn.Tx.TxnMeta.(*LikeMetadata)
+	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
+	return &LikeNotification{
+		AffectedPublicKeys: affectedPublicKeys,
+		LikedPostHashHex: hex.EncodeToString([]byte(metadata.LikedPostHash[:])),
+		IsUnlike: metadata.IsUnlike,
+	}
+}
+
+func makeFollowNotification(mempoolTxn *MempoolTx) (*FollowNotification) {
+	metadata := mempoolTxn.Tx.TxnMeta.(*FollowMetadata)
+	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
+	return &FollowNotification{
+		AffectedPublicKeys: affectedPublicKeys,
+		FollowedPublicKey: hex.EncodeToString(metadata.FollowedPublicKey),
+		IsUnfollow: metadata.IsUnfollow,
+	}
+}
+
+func makeBasicTransferNotification(mempoolTxn *MempoolTx) (*BasicTransferNotification) {
+	return &BasicTransferNotification{}
+}
+
+func makeCreatorCoinNotification(mempoolTxn *MempoolTx) (*CreatorCoinNotification) {
+	metadata := mempoolTxn.Tx.TxnMeta.(*CreatorCoinMetadataa)
+	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
+	return &CreatorCoinNotification {
+		AffectedPublicKeys: affectedPublicKeys,
+		ProfilePublicKey: hex.EncodeToString(metadata.ProfilePublicKey),
+		OperationType: metadata.OperationType,
+		BitCloutToSellNanos: metadata.BitCloutToSellNanos,
+		CreatorCoinToSellNanos: metadata.CreatorCoinToSellNanos,
+		BitCloutToAddNanos: metadata.BitCloutToAddNanos,
+		MinBitCloutExpectedNanos: metadata.MinBitCloutExpectedNanos,
+		MinCreatorCoinExpectedNanos: metadata.MinCreatorCoinExpectedNanos,
+	}
+}
+
+func makeCreatorCoinTransferNotification(mempoolTxn *MempoolTx) (*CreatorCoinTransferNotification) {
+	metadata := mempoolTxn.Tx.TxnMeta.(*CreatorCoinTransferMetadataa)
+	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
+	return &CreatorCoinTransferNotification {
+		AffectedPublicKeys: affectedPublicKeys,
+		ProfilePublicKey: hex.EncodeToString(metadata.ProfilePublicKey),
+		CreatorCoinToTransferNanos: metadata.CreatorCoinToTransferNanos,
+		ReceiverPublicKey: hex.EncodeToString(metadata.ReceiverPublicKey),
 	}
 }
