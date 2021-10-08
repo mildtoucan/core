@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/golang/glog"
+	"time"
 )
 
 
@@ -17,7 +18,7 @@ type SQSQueue struct {
 
 type SqsInput struct {
 	TransactionType string
-	TransactionHash string
+	TransactionHashHex string
 	NotificationData BitCloutNotification
 }
 
@@ -34,33 +35,44 @@ func NewSQSQueue(client *sqs.Client, queueUrl string) *SQSQueue {
 
 type SubmitPostNotification struct {
 	AffectedPublicKeys []*AffectedPublicKey
+	TimestampNanos uint64
+	TransactorPublicKeyBase58Check string
 	PostHashToModify string
-	ParentStakeId string
+	ParentStakeID string
 	Body string
 	CreatorBasisPoints uint64
 	StakeMultipleBasisPoints uint64
-	TimestampNanos uint64
 	IsHidden bool
 }
 
 type LikeNotification struct {
 	AffectedPublicKeys []*AffectedPublicKey
+	TimestampNanos uint64
+	TransactorPublicKeyBase58Check string
 	LikedPostHashHex string
 	IsUnlike bool
 }
 
 type FollowNotification struct {
 	AffectedPublicKeys []*AffectedPublicKey
+	TimestampNanos uint64
+	TransactorPublicKeyBase58Check string
 	FollowedPublicKey string
 	IsUnfollow bool
 }
 
 type BasicTransferNotification struct {
-
+	AffectedPublicKeys []*AffectedPublicKey
+	TimestampNanos uint64
+	TransactorPublicKeyBase58Check string
+	DiamondLevel int64
+	PostHashHex string
 }
 
 type CreatorCoinNotification struct {
 	AffectedPublicKeys []*AffectedPublicKey
+	TimestampNanos uint64
+	TransactorPublicKeyBase58Check string
 	ProfilePublicKey string
 	OperationType CreatorCoinOperationType
 	BitCloutToSellNanos    uint64
@@ -72,6 +84,8 @@ type CreatorCoinNotification struct {
 
 type CreatorCoinTransferNotification struct {
 	AffectedPublicKeys []*AffectedPublicKey
+	TimestampNanos uint64
+	TransactorPublicKeyBase58Check string
 	ProfilePublicKey string
 	CreatorCoinToTransferNanos uint64
 	ReceiverPublicKey          string
@@ -100,7 +114,7 @@ func (sqsQueue *SQSQueue) SendSQSTxnMessage(mempoolTxn *MempoolTx) {
 
 	sqsInput := SqsInput {
 		TransactionType: txn.TxnMeta.GetTxnType().String(),
-		TransactionHash: hex.EncodeToString(txn.Hash()[:]),
+		TransactionHashHex: hex.EncodeToString(txn.Hash()[:]),
 		NotificationData: notificationData,
 	}
 
@@ -125,8 +139,9 @@ func makeSubmitPostNotification(mempoolTxn *MempoolTx) (*SubmitPostNotification)
 	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
 	return &SubmitPostNotification {
 		AffectedPublicKeys: affectedPublicKeys,
+		TransactorPublicKeyBase58Check: mempoolTxn.TxMeta.TransactorPublicKeyBase58Check,
 		PostHashToModify: hex.EncodeToString(metadata.PostHashToModify),
-		ParentStakeId: hex.EncodeToString(metadata.ParentStakeID),
+		ParentStakeID: hex.EncodeToString(metadata.ParentStakeID),
 		Body: string(metadata.Body),
 		CreatorBasisPoints: metadata.CreatorBasisPoints,
 		StakeMultipleBasisPoints: metadata.StakeMultipleBasisPoints,
@@ -140,6 +155,8 @@ func makeLikeNotification(mempoolTxn *MempoolTx) (*LikeNotification) {
 	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
 	return &LikeNotification{
 		AffectedPublicKeys: affectedPublicKeys,
+		TimestampNanos: uint64(time.Now().UnixNano()),
+		TransactorPublicKeyBase58Check: mempoolTxn.TxMeta.TransactorPublicKeyBase58Check,
 		LikedPostHashHex: hex.EncodeToString([]byte(metadata.LikedPostHash[:])),
 		IsUnlike: metadata.IsUnlike,
 	}
@@ -150,13 +167,24 @@ func makeFollowNotification(mempoolTxn *MempoolTx) (*FollowNotification) {
 	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
 	return &FollowNotification{
 		AffectedPublicKeys: affectedPublicKeys,
+		TimestampNanos: uint64(time.Now().UnixNano()),
+		TransactorPublicKeyBase58Check: mempoolTxn.TxMeta.TransactorPublicKeyBase58Check,
 		FollowedPublicKey: hex.EncodeToString(metadata.FollowedPublicKey),
 		IsUnfollow: metadata.IsUnfollow,
 	}
 }
 
 func makeBasicTransferNotification(mempoolTxn *MempoolTx) (*BasicTransferNotification) {
-	return &BasicTransferNotification{}
+	metadata := mempoolTxn.TxMeta.BasicTransferTxindexMetadata
+	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
+	// TODO figure out of if any other basic transfers besides diamonds are relevant to us
+	return &BasicTransferNotification {
+		AffectedPublicKeys: affectedPublicKeys,
+		TimestampNanos: uint64(time.Now().UnixNano()),
+		TransactorPublicKeyBase58Check: mempoolTxn.TxMeta.TransactorPublicKeyBase58Check,
+		DiamondLevel: metadata.DiamondLevel,
+		PostHashHex: metadata.PostHashHex,
+	}
 }
 
 func makeCreatorCoinNotification(mempoolTxn *MempoolTx) (*CreatorCoinNotification) {
@@ -164,6 +192,8 @@ func makeCreatorCoinNotification(mempoolTxn *MempoolTx) (*CreatorCoinNotificatio
 	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
 	return &CreatorCoinNotification {
 		AffectedPublicKeys: affectedPublicKeys,
+		TimestampNanos: uint64(time.Now().UnixNano()),
+		TransactorPublicKeyBase58Check: mempoolTxn.TxMeta.TransactorPublicKeyBase58Check,
 		ProfilePublicKey: hex.EncodeToString(metadata.ProfilePublicKey),
 		OperationType: metadata.OperationType,
 		BitCloutToSellNanos: metadata.BitCloutToSellNanos,
@@ -179,6 +209,8 @@ func makeCreatorCoinTransferNotification(mempoolTxn *MempoolTx) (*CreatorCoinTra
 	affectedPublicKeys := mempoolTxn.TxMeta.AffectedPublicKeys
 	return &CreatorCoinTransferNotification {
 		AffectedPublicKeys: affectedPublicKeys,
+		TimestampNanos: uint64(time.Now().UnixNano()),
+		TransactorPublicKeyBase58Check: mempoolTxn.TxMeta.TransactorPublicKeyBase58Check,
 		ProfilePublicKey: hex.EncodeToString(metadata.ProfilePublicKey),
 		CreatorCoinToTransferNanos: metadata.CreatorCoinToTransferNanos,
 		ReceiverPublicKey: hex.EncodeToString(metadata.ReceiverPublicKey),
